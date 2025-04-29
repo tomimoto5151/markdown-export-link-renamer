@@ -1,0 +1,11 @@
+{
+  "id": "md-export-link-renamer",
+  "name": "Markdown Export Link Renamer",
+  "version": "1.0.0",
+  "minAppVersion": "0.15.0",
+  "description": "A plugin to export the selected markdown and related files to a specified directory!",
+  "author": "Tommy-Kun",
+  "authorUrl": "",
+  "isDesktopOnly": false,
+  "main": "main.js"
+}

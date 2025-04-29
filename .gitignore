@@ -1,0 +1,17 @@
+# node_modulesは絶対にgit管理しない
+node_modules/
+
+# ビルド成果物（main.jsなど）
+main.js
+
+# OSやエディタのゴミファイル
+.DS_Store
+Thumbs.db
+
+# ログや一時ファイル
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# 環境変数や個人設定
+.env
