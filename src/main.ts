@@ -5,28 +5,50 @@ import { PluginSettingTab } from "obsidian";
  * 画像リネーム確認用モーダル
  */
 class RenameConfirmModal extends Modal {
-  private onSubmit: (rename: boolean) => void;
-  constructor(app: App, onSubmit: (rename: boolean) => void) {
+  private onSubmit: (rename: boolean, insertStyle: boolean, insertLineBreaks: boolean) => void;
+  constructor(app: App, onSubmit: (rename: boolean, insertStyle: boolean, insertLineBreaks: boolean) => void) {
     super(app);
     this.onSubmit = onSubmit;
   }
   onOpen() {
     const { contentEl } = this;
     contentEl.createEl('h2', { text: "Rename image files?" });
+    let insertStyle = false;
+    let insertLineBreaks = false;
+    // スタイル用チェックボックス
+    const styleSetting = new Setting(contentEl)
+      .setName('Insert compatibility style for images');
+    const checkbox = contentEl.createEl('input', { type: 'checkbox' });
+    checkbox.checked = false;
+    checkbox.style.marginRight = '8px';
+    styleSetting.settingEl.prepend(checkbox);
+    checkbox.onchange = () => {
+      insertStyle = checkbox.checked;
+    };
+    // 改行用チェックボックス
+    const lbSetting = new Setting(contentEl)
+      .setName('Insert compatibility line breaks for images');
+    const lbCheckbox = contentEl.createEl('input', { type: 'checkbox' });
+    lbCheckbox.checked = false;
+    lbCheckbox.style.marginRight = '8px';
+    lbSetting.settingEl.prepend(lbCheckbox);
+    lbCheckbox.onchange = () => {
+      insertLineBreaks = lbCheckbox.checked;
+    };
     new Setting(contentEl)
       .addButton(btn =>
         btn.setButtonText("Rename")
           .setCta()
           .onClick(() => {
             this.close();
-            this.onSubmit(true);
+            this.onSubmit(true, insertStyle, insertLineBreaks);
           })
       )
       .addButton(btn =>
         btn.setButtonText("Keep original")
           .onClick(() => {
             this.close();
-            this.onSubmit(false);
+            this.onSubmit(false, insertStyle, insertLineBreaks);
           })
       );
   }
@@ -91,10 +113,10 @@ class MdExportPlugin extends Plugin {
       exportDir = path.join(exportDir, baseName);
     }
     // 画像リネームモーダルだけ出す
-    new RenameConfirmModal(this.app, async (doRename) => {
+    new RenameConfirmModal(this.app, async (doRename, insertStyle, insertLineBreaks) => {
       const mdContent = await this.app.vault.read(activeFile);
       const mdLinks = this.extractLinks(mdContent);
-      await this.exportWithLinks(activeFile, mdContent, mdLinks, exportDir, doRename, new Set());
+      await this.exportWithLinks(activeFile, mdContent, mdLinks, exportDir, doRename, insertStyle, insertLineBreaks, new Set());
     }).open();
   }
 
@@ -115,7 +137,7 @@ class MdExportPlugin extends Plugin {
     return { images: decodedImages, mdFiles: mdLinks };
   }
 
-  async exportWithLinks(activeFile: TFile, mdContent: string, mdLinks: { images: string[]; mdFiles: string[] }, exportDir: string, doRename: boolean, exportedSet: Set<string>) {
+  async exportWithLinks(activeFile: TFile, mdContent: string, mdLinks: { images: string[]; mdFiles: string[] }, exportDir: string, doRename: boolean, insertStyle: boolean, insertLineBreaks: boolean, exportedSet: Set<string>) {
     try {
       const fs = (window as any).require ? (window as any).require('fs') : null;
       const path = (window as any).require ? (window as any).require('path') : null;
@@ -138,22 +160,26 @@ class MdExportPlugin extends Plugin {
       const outMdPath = path.join(exportDir, activeFile.basename + '.md');
       fs.writeFileSync(outMdPath, mdContent, 'utf-8');
 
-      // linked-images出力
-      const linkedImagesDir = path.join(exportDir, 'linked-images');
-      if (!fs.existsSync(linkedImagesDir)) {
-        fs.mkdirSync(linkedImagesDir, { recursive: true });
-      }
-      const imageNameMap: { [orig: string]: string } = {};
+      // 画像名マッピング（rename有効時はリネーム名、無効時は元名）
+      const imageNameMap: Record<string, string> = {};
       mdLinks.images.forEach((origImg, idx) => {
+        let ext = origImg.match(/\.[^.]+$/)?.[0] || '';
         if (doRename) {
-          // image01, image02... + 拡張子
-          const ext = path.extname(origImg) || '.png';
           const num = String(idx + 1).padStart(2, '0');
           imageNameMap[origImg] = `image${num}${ext}`;
         } else {
           imageNameMap[origImg] = origImg;
         }
       });
+
+      // 画像出力先ディレクトリ
+      const imagesFolderName = "images"; // ←linked-imagesにしたい場合はここを変更
+      const imagesDir = path.join(exportDir, imagesFolderName);
+      if (!fs.existsSync(imagesDir)) {
+        fs.mkdirSync(imagesDir, { recursive: true });
+      }
+
+      // 画像コピー＆リンク書き換え
       for (const origImg of mdLinks.images) {
         let imgFile: TFile | null = null;
         let candidatePath = '';
@@ -161,43 +187,26 @@ class MdExportPlugin extends Plugin {
         if (origImg.includes('/') || origImg.startsWith('.')) {
           candidatePath = path.normalize(origImg);
           imgFile = this.app.vault.getAbstractFileByPath(candidatePath) as TFile;
-        }
-        // ファイル名だけの場合は、ノートのディレクトリから上の階層を順にたどる
-        if (!imgFile && !origImg.includes('/')) {
-          const notePathParts = activeFile.path.split('/');
-          notePathParts.pop(); // ノート自身を除外
-          while (notePathParts.length > 0) {
-            candidatePath = [...notePathParts, origImg].join('/');
-            imgFile = this.app.vault.getAbstractFileByPath(candidatePath) as TFile;
-            if (imgFile) break;
-            notePathParts.pop();
-          }
-        }
-        // attachments等のよくあるディレクトリで探す
-        if (!imgFile) {
-          for (const dir of ['attachments', 'Assets', 'asset', 'images', 'image']) {
-            candidatePath = `${dir}/${origImg}`;
+        } else {
+          // よくあるディレクトリで探す
+          for (const dir of ['', 'attachments', 'Assets', 'asset', 'images', 'image']) {
+            candidatePath = dir ? `${dir}/${origImg}` : origImg;
             imgFile = this.app.vault.getAbstractFileByPath(candidatePath) as TFile;
             if (imgFile) break;
           }
         }
-        // Vault全体で検索（最初に見つかったもの）
+        // Vault全体でbasename一致で探す
         if (!imgFile) {
           const files = this.app.vault.getFiles();
           imgFile = files.find(f => f.name === origImg) || null;
         }
         if (imgFile instanceof TFile) {
           try {
-            new Notice(`Copying image file: ${imgFile.path} → linked-images/${imageNameMap[origImg]}`);
+            new Notice(`Copying image file: ${imgFile.path} → ${imagesFolderName}/${imageNameMap[origImg]}`);
             const data = await this.app.vault.readBinary(imgFile);
             if (data) {
-              const outPath = path.join(linkedImagesDir, imageNameMap[origImg]);
+              const outPath = path.join(imagesDir, imageNameMap[origImg]);
               fs.writeFileSync(outPath, Buffer.from(data));
-              // 画像リンクを新しいパスに書き換え
-              // Obsidian型
-              mdContent = mdContent.split(`![[${origImg}]]`).join(`![[linked-images/${imageNameMap[origImg]}]]`);
-              // Markdown標準型
-              mdContent = mdContent.replace(new RegExp(`!\\[[^\\]]*\\]\\(${origImg.replace(/[-/\\^$*+?.()|[\]{}]/g, "\\$&")}\\)`, 'g'), `![](/linked-images/${imageNameMap[origImg]})`);
             } else {
               new Notice(`Image export failed: ${imgFile.path} is empty.`);
             }
@@ -209,6 +218,96 @@ class MdExportPlugin extends Plugin {
         }
       }
 
+      // 画像リンク書き換え（rename後のファイル名でMarkdown標準型に統一）
+      for (const origImg of mdLinks.images) {
+        const renamed = imageNameMap[origImg];
+        // Obsidian型 → Markdown標準型へ変換
+        mdContent = mdContent.split(`![[${origImg}]]`).join(`![](./${imagesFolderName}/${renamed})`);
+        // Markdown標準型も同じく統一
+        mdContent = mdContent.replace(
+          new RegExp(`!\\[[^\\]]*\\]\\(${origImg.replace(/[-/\\^$*+?.()|[\\]{}]/g, "\\$&")}\\)`, 'g'),
+          `![](./${imagesFolderName}/${renamed})`
+        );
+      }
+
+      // --- YAML frontmatter検出＆各行末スペース2つ付与（---行は除外） ---
+      let yamlFront = '';
+      let restContent = mdContent;
+      if (mdContent.startsWith('---')) {
+        const endIdx = mdContent.indexOf('\n---', 3);
+        if (endIdx !== -1) {
+          yamlFront = mdContent.slice(0, endIdx + 4);
+          restContent = mdContent.slice(endIdx + 4);
+          // --- で囲まれた部分を取得し、1行目と閉じ---以外にスペース2つ付与
+          const yamlLines = yamlFront.split('\n');
+          yamlFront = yamlLines.map((line, idx) => {
+            // 最初と最後（---）はそのまま
+            if (idx === 0 || idx === yamlLines.length - 1) return line;
+            // すでにスペース2つ以上ならそのまま
+            if (/\s{2,}$/.test(line)) return line.replace(/\s+$/, '  ');
+            // 1つだけスペースのときは2つに揃える
+            if (/\s$/.test(line)) return line.replace(/\s+$/, '  ');
+            // 末尾スペースがない場合は2つ追加
+            return line + '  ';
+          }).join('\n');
+        }
+      }
+      // --- styleタグをYAML frontmatterの直後（空行なし）に挿入。styleタグ末尾にスペース2つ付与 ---
+      let afterYaml = '';
+      if (yamlFront) {
+        if (insertStyle) {
+          afterYaml = '<style>img { max-width:900px; max-height:400px; }</style>  '; // 空行は絶対に入れない
+        } else {
+          afterYaml = '';
+        }
+      } else {
+        if (insertStyle) {
+          afterYaml = '<style>img { max-width:900px; max-height:400px; }</style>  ';
+        } else {
+          afterYaml = '';
+        }
+      }
+      // --- 本文側にも行末スペース2つ付与 ---
+      if (insertLineBreaks) {
+        restContent = restContent
+          .split('\n')
+          .map(line => {
+            if (
+              line.trim() === '' ||
+              line.trim().startsWith('```') ||
+              line.trim().startsWith('|') ||
+              /^\s*[-*+] /.test(line) ||
+              /^\s*\d+\. /.test(line)
+            ) {
+              return line;
+            }
+            // すでにスペース2つ以上ならそのまま
+            if (/\s{2,}$/.test(line)) return line.replace(/\s+$/, '  ');
+            // 1つだけスペースのときは2つに揃える
+            if (/\s$/.test(line)) return line.replace(/\s+$/, '  ');
+            // 末尾スペースがない場合は2つ追加
+            return line + '  ';
+          })
+          .join('\n');
+      }
+      // --- 組み立て ---
+      if (yamlFront) {
+        if (afterYaml) {
+          mdContent = yamlFront + '\n' + afterYaml + '\n' + restContent.replace(/^\n+/, '');
+        } else {
+          mdContent = yamlFront + '\n' + restContent.replace(/^\n+/, '');
+        }
+      } else {
+        if (afterYaml) {
+          mdContent = afterYaml + '\n' + restContent.replace(/^\n+/, '');
+        } else {
+          mdContent = restContent.replace(/^\n+/, '');
+        }
+      }
+      // --- ここまで ---
+      // mdファイル出力（画像リンク書き換え後）
+      fs.writeFileSync(outMdPath, mdContent, 'utf-8');
+
       // mdリンクを再帰的にエクスポート
       for (const mdLink of mdLinks.mdFiles) {
         let linkMdFile: TFile | null = null;
@@ -218,8 +317,8 @@ class MdExportPlugin extends Plugin {
         linkMdFile = this.app.vault.getAbstractFileByPath(candidatePath) as TFile;
         // attachments等のよくあるディレクトリで探す
         if (!linkMdFile) {
-          for (const dir of ['attachments', 'Assets', 'asset', 'images', 'image']) {
-            candidatePath = `${dir}/${mdLink}.md`;
+          for (const dir of ['', 'attachments', 'Assets', 'asset', 'images', 'image']) {
+            candidatePath = dir ? `${dir}/${mdLink}.md` : `${mdLink}.md`;
             linkMdFile = this.app.vault.getAbstractFileByPath(candidatePath) as TFile;
             if (linkMdFile) break;
           }
@@ -241,7 +340,7 @@ class MdExportPlugin extends Plugin {
           // サブディレクトリを作成
           const subDir = path.join(exportDir, mdLink);
           // 再帰的にエクスポート
-          await this.exportWithLinks(linkMdFile, linkMdContent, linkMdLinks, subDir, doRename, exportedSet);
+          await this.exportWithLinks(linkMdFile, linkMdContent, linkMdLinks, subDir, doRename, insertStyle, insertLineBreaks, exportedSet);
         } else {
           new Notice(`Linked note not found: ${mdLink}.md`);
         }
