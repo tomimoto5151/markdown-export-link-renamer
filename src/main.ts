@@ -56,7 +56,7 @@ class MdExportPlugin extends Plugin {
         if (file instanceof TFile && file.extension === 'md') {
           menu.addItem((item) => {
             item
-              .setTitle('Export from file menu')
+              .setTitle('Export md and linked files')
               .setIcon('paper-plane')
               .onClick(() => {
                 this.exportSelectedNote(file);
