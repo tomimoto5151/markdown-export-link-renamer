@@ -39,24 +39,24 @@ const DEFAULT_SETTINGS = {
   exportDir: "export"
 };
 
-class MarkdownExportPlugin extends Plugin {
+class MdExportPlugin extends Plugin {
   settings!: { exportDir: string };
 
   async onload() {
     await this.loadSettings();
-    this.addSettingTab(new MarkdownExporterSettingTab(this.app, this));
+    this.addSettingTab(new MdExporterSettingTab(this.app, this));
     this.addCommand({
-      id: 'markdown-exporter-export-selected',
+      id: 'md-exporter-export-selected',
       name: 'Export selected note',
       callback: () => this.exportSelectedNote()
     });
     // ファイルメニュー（右クリック）に直接追加するイベントリスナー
     this.registerEvent(
       this.app.workspace.on('file-menu', (menu, file) => {
-        if (file instanceof TFile && file.extension === 'markdown') {
+        if (file instanceof TFile && file.extension === 'md') {
           menu.addItem((item) => {
             item
-              .setTitle('Export markdown and linked files')
+              .setTitle('Export md and linked files')
               .setIcon('paper-plane')
               .onClick(() => {
                 this.exportSelectedNote(file);
@@ -92,30 +92,30 @@ class MarkdownExportPlugin extends Plugin {
     }
     // 画像リネームモーダルだけ出す
     new RenameConfirmModal(this.app, async (doRename) => {
-      const markdownContent = await this.app.vault.read(activeFile);
-      const markdownLinks = this.extractLinks(markdownContent);
-      await this.exportWithLinks(activeFile, markdownContent, markdownLinks, exportDir, doRename, new Set());
+      const mdContent = await this.app.vault.read(activeFile);
+      const mdLinks = this.extractLinks(mdContent);
+      await this.exportWithLinks(activeFile, mdContent, mdLinks, exportDir, doRename, new Set());
     }).open();
   }
 
-  extractLinks(markdownContent: string): { images: string[]; markdownFiles: string[] } {
+  extractLinks(mdContent: string): { images: string[]; mdFiles: string[] } {
     // Obsidian型: ![[...]]
-    const imageLinks = Array.from(markdownContent.matchAll(/!\[\[(.+?)\]\]/g)).map(match => match[1]);
+    const imageLinks = Array.from(mdContent.matchAll(/!\[\[(.+?)\]\]/g)).map(match => match[1]);
     // Markdown標準: ![alt](path)
-    const markdownImgLinks = Array.from(markdownContent.matchAll(/!\[[^\]]*\]\(([^\)]+)\)/g)).map(match => match[1]);
+    const mdImgLinks = Array.from(mdContent.matchAll(/!\[[^\]]*\]\(([^\)]+)\)/g)).map(match => match[1]);
     // URLデコード対応
     function safeDecode(s: string): string {
       try { return decodeURIComponent(s); } catch { return s; }
     }
     const decodedImages = Array.from(new Set([
       ...imageLinks,
-      ...markdownImgLinks.map(safeDecode)
+      ...mdImgLinks.map(safeDecode)
     ]));
-    const markdownLinks = Array.from(markdownContent.matchAll(/\[\[(.+?)\]\]/g)).map(match => match[1]).filter(link => !link.endsWith('.png') && !link.endsWith('.jpg'));
-    return { images: decodedImages, markdownFiles: markdownLinks };
+    const mdLinks = Array.from(mdContent.matchAll(/\[\[(.+?)\]\]/g)).map(match => match[1]).filter(link => !link.endsWith('.png') && !link.endsWith('.jpg'));
+    return { images: decodedImages, mdFiles: mdLinks };
   }
 
-  async exportWithLinks(activeFile: TFile, markdownContent: string, markdownLinks: { images: string[]; markdownFiles: string[] }, exportDir: string, doRename: boolean, exportedSet: Set<string>) {
+  async exportWithLinks(activeFile: TFile, mdContent: string, mdLinks: { images: string[]; mdFiles: string[] }, exportDir: string, doRename: boolean, exportedSet: Set<string>) {
     try {
       const fs = (window as any).require ? (window as any).require('fs') : null;
       const path = (window as any).require ? (window as any).require('path') : null;
@@ -134,9 +134,9 @@ class MarkdownExportPlugin extends Plugin {
       if (!fs.existsSync(exportDir)) {
         fs.mkdirSync(exportDir, { recursive: true });
       }
-      // markdownファイル出力
-      const outMarkdownPath = path.join(exportDir, activeFile.basename + '.markdown');
-      fs.writeFileSync(outMarkdownPath, markdownContent, 'utf-8');
+      // mdファイル出力
+      const outMdPath = path.join(exportDir, activeFile.basename + '.md');
+      fs.writeFileSync(outMdPath, mdContent, 'utf-8');
 
       // linked-images出力
       const linkedImagesDir = path.join(exportDir, 'linked-images');
@@ -144,7 +144,7 @@ class MarkdownExportPlugin extends Plugin {
         fs.mkdirSync(linkedImagesDir, { recursive: true });
       }
       const imageNameMap: { [orig: string]: string } = {};
-      markdownLinks.images.forEach((origImg, idx) => {
+      mdLinks.images.forEach((origImg, idx) => {
         if (doRename) {
           // image01, image02... + 拡張子
           const ext = path.extname(origImg) || '.png';
@@ -154,7 +154,7 @@ class MarkdownExportPlugin extends Plugin {
           imageNameMap[origImg] = origImg;
         }
       });
-      for (const origImg of markdownLinks.images) {
+      for (const origImg of mdLinks.images) {
         let imgFile: TFile | null = null;
         let candidatePath = '';
         // 画像リンクがパス付き（/や../含む）なら、そのままVault直下から参照
@@ -195,9 +195,9 @@ class MarkdownExportPlugin extends Plugin {
               fs.writeFileSync(outPath, Buffer.from(data));
               // 画像リンクを新しいパスに書き換え
               // Obsidian型
-              markdownContent = markdownContent.split(`![[${origImg}]]`).join(`![[linked-images/${imageNameMap[origImg]}]]`);
+              mdContent = mdContent.split(`![[${origImg}]]`).join(`![[linked-images/${imageNameMap[origImg]}]]`);
               // Markdown標準型
-              markdownContent = markdownContent.replace(new RegExp(`!\\[[^\\]]*\\]\\(${origImg.replace(/[-/\\^$*+?.()|[\]{}]/g, "\\$&")}\\)`, 'g'), `![](/linked-images/${imageNameMap[origImg]})`);
+              mdContent = mdContent.replace(new RegExp(`!\\[[^\\]]*\\]\\(${origImg.replace(/[-/\\^$*+?.()|[\]{}]/g, "\\$&")}\\)`, 'g'), `![](/linked-images/${imageNameMap[origImg]})`);
             } else {
               new Notice(`Image export failed: ${imgFile.path} is empty.`);
             }
@@ -209,41 +209,41 @@ class MarkdownExportPlugin extends Plugin {
         }
       }
 
-      // markdownリンクを再帰的にエクスポート
-      for (const markdownLink of markdownLinks.markdownFiles) {
-        let linkMarkdownFile: TFile | null = null;
+      // mdリンクを再帰的にエクスポート
+      for (const mdLink of mdLinks.mdFiles) {
+        let linkMdFile: TFile | null = null;
         let candidatePath = '';
         // まず相対パスで探す
-        candidatePath = markdownLink + '.markdown';
-        linkMarkdownFile = this.app.vault.getAbstractFileByPath(candidatePath) as TFile;
+        candidatePath = mdLink + '.md';
+        linkMdFile = this.app.vault.getAbstractFileByPath(candidatePath) as TFile;
         // attachments等のよくあるディレクトリで探す
-        if (!linkMarkdownFile) {
+        if (!linkMdFile) {
           for (const dir of ['attachments', 'Assets', 'asset', 'images', 'image']) {
-            candidatePath = `${dir}/${markdownLink}.markdown`;
-            linkMarkdownFile = this.app.vault.getAbstractFileByPath(candidatePath) as TFile;
-            if (linkMarkdownFile) break;
+            candidatePath = `${dir}/${mdLink}.md`;
+            linkMdFile = this.app.vault.getAbstractFileByPath(candidatePath) as TFile;
+            if (linkMdFile) break;
           }
         }
         // Vault全体でbasename一致で探す
-        if (!linkMarkdownFile) {
+        if (!linkMdFile) {
           const files = this.app.vault.getFiles();
           for (const file of files) {
-            if (file.basename === markdownLink) {
-              linkMarkdownFile = file;
+            if (file.basename === mdLink) {
+              linkMdFile = file;
               break;
             }
           }
         }
-        if (linkMarkdownFile instanceof TFile) {
-          new Notice(`Exporting linked note: ${markdownLink}.markdown`);
-          const linkMarkdownContent = await this.app.vault.read(linkMarkdownFile);
-          const linkMarkdownLinks = this.extractLinks(linkMarkdownContent);
+        if (linkMdFile instanceof TFile) {
+          new Notice(`Exporting linked note: ${mdLink}.md`);
+          const linkMdContent = await this.app.vault.read(linkMdFile);
+          const linkMdLinks = this.extractLinks(linkMdContent);
           // サブディレクトリを作成
-          const subDir = path.join(exportDir, markdownLink);
+          const subDir = path.join(exportDir, mdLink);
           // 再帰的にエクスポート
-          await this.exportWithLinks(linkMarkdownFile, linkMarkdownContent, linkMarkdownLinks, subDir, doRename, exportedSet);
+          await this.exportWithLinks(linkMdFile, linkMdContent, linkMdLinks, subDir, doRename, exportedSet);
         } else {
-          new Notice(`Linked note not found: ${markdownLink}.markdown`);
+          new Notice(`Linked note not found: ${mdLink}.md`);
         }
       }
       new Notice('Export completed!');
@@ -253,9 +253,9 @@ class MarkdownExportPlugin extends Plugin {
   }
 }
 
-class MarkdownExporterSettingTab extends PluginSettingTab {
-  plugin: MarkdownExportPlugin;
-  constructor(app: App, plugin: MarkdownExportPlugin) {
+class MdExporterSettingTab extends PluginSettingTab {
+  plugin: MdExportPlugin;
+  constructor(app: App, plugin: MdExportPlugin) {
     super(app, plugin);
     this.plugin = plugin;
   }
@@ -277,4 +277,4 @@ class MarkdownExporterSettingTab extends PluginSettingTab {
   }
 }
 
-export default MarkdownExportPlugin;
+export default MdExportPlugin;
